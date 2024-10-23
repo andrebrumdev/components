@@ -1,10 +1,11 @@
 import { Command } from "commander";
 import path from "node:path";
-import { existsSync, promises as fs } from "node:fs"; // Usar fs para ler diretórios e arquivos
+import { existsSync, promises as fs } from "node:fs";
 import { z } from "zod";
 import ora from "ora";
-import prompts from "prompts"; // Importa prompts para interatividade
-import { downloadAndExtractFolder } from "../utils/download";
+import prompts from "prompts";
+import axios from "axios";
+import AdmZip from "adm-zip"; // Para manipular arquivos ZIP
 
 export const addOptionsSchema = z.object({
   components: z.array(z.string()).optional(),
@@ -42,15 +43,25 @@ export const add = new Command()
         cwd: path.resolve(opts.cwd),
         ...opts,
       });
-      const baseDir = path.resolve("src/components"); // Diretório base onde as subpastas são buscadas (src)
-      const availableDirs = await getAvailableDirectories(baseDir); // Obtém as subpastas
+
+      const spinner = ora("Baixando e extraindo componentes...").start();
+
+      // Função que faz o download do ZIP e retorna a instância do AdmZip
+      const zip = await downloadAndExtractFolder(
+        "https://github.com/andrebrumdev/components/archive/refs/heads/main.zip"
+      ); // Ajuste o URL conforme necessário
+
+      spinner.succeed("Componentes baixados e extraídos com sucesso.");
+
+      // Listar diretórios disponíveis no ZIP
+      const availableDirs = getAvailableDirectoriesFromZip(zip);
 
       if (availableDirs.length === 0) {
         console.log("Nenhuma pasta disponível para copiar.");
         return;
       }
 
-      // Exibe a seleção interativa de pastas
+      // Exibe a seleção interativa de pastas no ZIP
       const { selectedDir } = await prompts({
         type: "select",
         name: "selectedDir",
@@ -64,11 +75,12 @@ export const add = new Command()
       }
 
       // Se o usuário não forneceu componentes, exibir prompt para selecionar
-      const srcDir = path.join(baseDir, selectedDir); // Diretório da pasta selecionada
       if (!components.length) {
-        const availableComponents = await getAvailableDirectories(srcDir); // Obtenha os componentes disponíveis
+        const availableComponents = getAvailableComponentsFromZip(
+          zip,
+          selectedDir
+        );
 
-        // Exibir a seleção interativa com prompts
         const { components: selectedComponents } = await prompts({
           type: "multiselect",
           name: "components",
@@ -76,85 +88,107 @@ export const add = new Command()
           hint: "Espaço para selecionar. A para selecionar todos. Enter para enviar.",
           instructions: false,
           choices: availableComponents.map((component) => ({
-            title: component, // Exibe o nome do componente na interface
-            value: component, // Valor selecionado
-            selected: options.all, // Marca todos os componentes se --all for passado
+            title: component,
+            value: component,
+            selected: options.all,
           })),
         });
 
-        // Atualizar os componentes selecionados
         components = selectedComponents;
       }
 
       if (!components.length && !options.all) {
         console.log("Nenhum componente foi selecionado.");
+        return;
       }
 
-      // Copiar os componentes
-      await copyComponents(srcDir, components, options);
+      // Copiar os componentes selecionados do ZIP para o diretório de destino
+      await copyComponentsFromZip(zip, selectedDir, components, options);
     } catch (error) {
       console.error("Erro ao copiar componentes:", error);
     }
   });
 
-// Função para obter os componentes disponíveis no diretório de origem
-async function getAvailableComponents() {
-  const componentsDir = path.resolve("src/ui"); // Ajuste conforme a origem real dos componentes
+// Função para baixar e extrair um ZIP
+export async function downloadAndExtractFolder(url: string): Promise<AdmZip> {
   try {
-    const files = await fs.readdir(componentsDir);
-    return files.filter((file) => !file.includes(".")); // Retorna apenas diretórios (outra lógica pode ser aplicada conforme a necessidade)
+    const response = await axios.get(url, {
+      responseType: "arraybuffer", // Receber os dados como array de bytes
+    });
+
+    // Criar uma instância do AdmZip com os dados recebidos
+    const zip = new AdmZip(response.data);
+    return zip;
   } catch (error) {
-    console.error("Erro ao listar componentes:", error);
-    return [];
+    console.error("Erro ao baixar o arquivo ZIP:", error);
+    throw error;
   }
 }
 
-// Função para copiar os componentes selecionados
-async function copyComponents(
-  componentsDir: string,
-  components: any,
-  { overwrite, cwd: destDir }: z.infer<typeof addOptionsSchema>
-) {
-  const availableComponents = await getAvailableComponents();
-  const spinner = ora("Copiando componentes...").start();
+// Função para listar as subpastas disponíveis no arquivo ZIP
+function getAvailableDirectoriesFromZip(zip: AdmZip): string[] {
+  const directories = new Set<string>();
+  zip.getEntries().forEach((entry) => {
+    const dirName = entry.entryName.split("/")[0];
+    if (entry.isDirectory && !directories.has(dirName)) {
+      directories.add(dirName);
+    }
+  });
+  return Array.from(directories);
+}
 
-  // Copia os componentes especificados
+// Função para listar componentes disponíveis em uma subpasta específica no ZIP
+function getAvailableComponentsFromZip(
+  zip: AdmZip,
+  selectedDir: string
+): string[] {
+  const components = new Set<string>();
+  zip.getEntries().forEach((entry) => {
+    if (entry.entryName.startsWith(`${selectedDir}/`) && !entry.isDirectory) {
+      const component = entry.entryName
+        .replace(`${selectedDir}/`, "")
+        .split("/")[0];
+      components.add(component);
+    }
+  });
+  return Array.from(components);
+}
+
+// Função para copiar componentes selecionados do ZIP para o diretório de destino
+async function copyComponentsFromZip(
+  zip: AdmZip,
+  selectedDir: string,
+  components: string[],
+  { cwd: destDir, overwrite }: z.infer<typeof addOptionsSchema>
+): Promise<void> {
+  const spinner = ora("Copiando componentes selecionados...").start();
+
   for (const component of components) {
-    if (!availableComponents.includes(component)) {
-      console.log(`Componente ${component} não está disponível.`);
-      continue;
-    }
-
-    const srcComponentDir = path.join(componentsDir, component);
-    const destComponentDir = path.join(destDir, component);
-
-    try {
-      // Copia a pasta inteira
-      await downloadAndExtractFolder(
-        srcComponentDir,
-        destComponentDir,
-        overwrite
+    const zipEntries = zip
+      .getEntries()
+      .filter((entry) =>
+        entry.entryName.startsWith(`${selectedDir}/${component}/`)
       );
-      console.log(`Componente ${component} copiado para ${destDir}.`);
-    } catch (error) {
-      console.error(`Erro ao copiar ${component}:`, error);
-    }
-  }
 
-  spinner.succeed("Todos os componentes foram copiados.");
-}
+    for (const entry of zipEntries) {
+      const relativePath = entry.entryName.replace(`${selectedDir}/`, "");
+      const destPath = path.join(destDir, relativePath);
 
-async function getAvailableDirectories(baseDir: string) {
-  const directories = [];
-  try {
-    const entries = await fs.readdir(baseDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        directories.push(entry.name); // Adiciona a subpasta como uma opção
+      // Verifica se é uma pasta ou arquivo
+      if (entry.isDirectory) {
+        if (!existsSync(destPath)) {
+          await fs.mkdir(destPath, { recursive: true });
+        }
+      } else {
+        if (existsSync(destPath) && !overwrite) {
+          console.log(`Arquivo ${relativePath} já existe. Pulando...`);
+          continue;
+        }
+        await fs.writeFile(destPath, entry.getData());
+        console.log(`Arquivo ${relativePath} copiado para ${destDir}.`);
       }
     }
-  } catch (error) {
-    console.error(`Erro ao ler o diretório ${baseDir}:`, error);
   }
-  return directories;
+
+  spinner.succeed("Componentes copiados com sucesso.");
 }
