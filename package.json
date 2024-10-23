@@ -6,8 +6,12 @@
   "type": "module",
   "license": "MIT",
   "exports": "./dist/index.js",
-  "bin": "./dist/index.js",
+  "bin": {
+    "cli": "./dist/index.js",
+    "components-cli": "./dist/index.js"
+  },
   "dependencies": {
+    "axios": "^1.7.7",
     "commander": "^12.1.0",
     "ora": "^8.1.0",
     "prompts": "^2.4.2",
@@ -30,7 +34,9 @@
     "test:dev": "REGISTRY_URL=http://localhost:3333/r vitest run"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.5",
     "@types/prompts": "^2.4.9",
+    "adm-zip": "^0.5.16",
     "cross-env": "^7.0.3",
     "rimraf": "^6.0.1",
     "tsup": "^8.3.0",

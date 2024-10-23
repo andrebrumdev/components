@@ -4,6 +4,7 @@ import { existsSync, promises as fs } from "node:fs"; // Usar fs para ler diret�
 import { z } from "zod";
 import ora from "ora";
 import prompts from "prompts"; // Importa prompts para interatividade
+import { downloadAndExtractFolder } from "../utils/download";
 
 export const addOptionsSchema = z.object({
   components: z.array(z.string()).optional(),
@@ -108,36 +109,6 @@ async function getAvailableComponents() {
   }
 }
 
-// Função para copiar uma pasta de origem para destino
-async function copyFolder(srcDir: string, destDir: string, overwrite = false) {
-  const entries = await fs.readdir(srcDir, { withFileTypes: true });
-
-  // Cria a pasta de destino se não existir
-  if (!existsSync(destDir)) {
-    await fs.mkdir(destDir, { recursive: true });
-  }
-
-  for (const entry of entries) {
-    const srcPath = path.join(srcDir, entry.name);
-    const destPath = path.join(destDir, entry.name);
-
-    if (entry.isDirectory()) {
-      // Recursivamente copiar subpastas
-      await copyFolder(srcPath, destPath, overwrite);
-    } else {
-      // Se for um arquivo, copia ele
-      if (existsSync(destPath) && !overwrite) {
-        console.log(
-          `Arquivo ${entry.name} já existe em ${destDir}. Pulando...`
-        );
-        continue;
-      }
-      await fs.copyFile(srcPath, destPath);
-      console.log(`Arquivo ${entry.name} copiado para ${destDir}.`);
-    }
-  }
-}
-
 // Função para copiar os componentes selecionados
 async function copyComponents(
   componentsDir: string,
@@ -159,7 +130,11 @@ async function copyComponents(
 
     try {
       // Copia a pasta inteira
-      await copyFolder(srcComponentDir, destComponentDir, overwrite);
+      await downloadAndExtractFolder(
+        srcComponentDir,
+        destComponentDir,
+        overwrite
+      );
       console.log(`Componente ${component} copiado para ${destDir}.`);
     } catch (error) {
       console.error(`Erro ao copiar ${component}:`, error);
